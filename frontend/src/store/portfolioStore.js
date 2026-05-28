@@ -204,27 +204,28 @@ export const usePortfolioStore = create(
 
       getPosition: (ticker) => get().positions.find(p => p.ticker === ticker),
 
-      // ── Cloud sync (backward compat) ──
-      syncFromCloud: async (userId) => {
+      // ── Cloud sync ──
+      syncFromCloud: async (token) => {
+        if (!token) return
         try {
-          const { data } = await api.get('/portfolio', { params: { userId } })
-          if (data && data.length > 0) {
-            // Convert legacy positions format to transaction format
-            const txs = data.map(p => ({
-              id: p.id, type: 'BUY', ticker: p.ticker,
-              date: p.entryDate ?? new Date().toISOString().slice(0, 10),
-              shares: p.shares, price: p.entryPrice, notes: '',
-            }))
-            const portfolio = { id: 'default', name: 'Principal', cash: 0, targetPrices: {}, transactions: txs }
-            set(buildState([portfolio], 'default'))
+          const { data } = await api.get('/portfolio', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          // data is the portfolios array stored as JSONB
+          if (data && Array.isArray(data) && data.length > 0) {
+            const activeId = data[0].id
+            set({ ...buildState(data, activeId), synced: true })
           }
-        } catch { /* offline */ }
+        } catch { /* offline or first login */ }
       },
 
-      saveToCloud: async (userId) => {
+      saveToCloud: async (token) => {
+        if (!token) return
         try {
-          const { positions } = get()
-          await api.post('/portfolio', { userId, positions })
+          const { portfolios } = get()
+          await api.post('/portfolio', { portfolios }, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
           set({ synced: true })
         } catch { /* offline */ }
       },

@@ -2,6 +2,8 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
+import { initDb } from './db.js'
+import authRoutes      from './routes/auth.js'
 import marketRoutes    from './routes/market.js'
 import signalRoutes    from './routes/signals.js'
 import portfolioRoutes from './routes/portfolio.js'
@@ -26,6 +28,7 @@ app.use(express.json())
 app.use(rateLimit({ windowMs: 60_000, max: 60, message: { error: 'Too many requests' } }))
 
 // ── Routes ──────────────────────────────────────────────
+app.use('/api/auth',      authRoutes)
 app.use('/api/market',    marketRoutes)
 app.use('/api/signals',   signalRoutes)
 app.use('/api/portfolio', portfolioRoutes)
@@ -39,4 +42,11 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: err.message ?? 'Internal server error' })
 })
 
-app.listen(PORT, () => console.log(`🌌 Orion backend running on :${PORT}`))
+// ── Start ───────────────────────────────────────────────
+initDb()
+  .then(() => app.listen(PORT, () => console.log(`🌌 Orion backend running on :${PORT}`)))
+  .catch(err => {
+    console.error('DB init failed:', err)
+    // Still start without cloud persistence if DB is unavailable
+    app.listen(PORT, () => console.log(`🌌 Orion backend running on :${PORT} (no DB)`))
+  })

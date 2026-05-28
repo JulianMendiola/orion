@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import axios from 'axios'
-import { createClient } from '@supabase/supabase-js'
+import { pool } from '../db.js'
+import { requireAuth } from '../middleware/auth.js'
 
 const router = Router()
 
@@ -32,7 +33,6 @@ async function fetchCurrentPrice(ticker) {
 }
 
 function nearestPrice(history, targetDate) {
-  // Find exact or nearest prior trading day
   const sorted = history.filter(h => h.date <= targetDate)
   return sorted.length ? sorted[sorted.length - 1].close : (history[0]?.close ?? null)
 }
@@ -47,17 +47,14 @@ router.post('/benchmark', async (req, res, next) => {
 
     if (!buys.length) return res.json({ summary: null, equity: [] })
 
-    // Fetch SPY & QQQ full history in parallel
     const [spyHist, qqqHist] = await Promise.all([
       fetchHistory('SPY', '5y'),
       fetchHistory('QQQ', '5y'),
     ])
 
-    // Build date-indexed maps
     const spyMap = Object.fromEntries(spyHist.map(h => [h.date, h.close]))
     const qqqMap = Object.fromEntries(qqqHist.map(h => [h.date, h.close]))
 
-    // Build phantom portfolios (invest same $ on each buy date)
     let spyShares = 0, qqqShares = 0, totalInvested = 0
     const checkpoints = []
 
@@ -78,19 +75,16 @@ router.post('/benchmark', async (req, res, next) => {
       })
     }
 
-    // Current prices
-    const today     = new Date().toISOString().slice(0, 10)
-    const spyNow    = nearestPrice(spyHist, today) ?? spyHist.at(-1)?.close ?? 0
-    const qqqNow    = nearestPrice(qqqHist, today) ?? qqqHist.at(-1)?.close ?? 0
-    const spyFinal  = parseFloat((spyShares * spyNow).toFixed(2))
-    const qqqFinal  = parseFloat((qqqShares * qqqNow).toFixed(2))
+    const today    = new Date().toISOString().slice(0, 10)
+    const spyNow   = nearestPrice(spyHist, today) ?? spyHist.at(-1)?.close ?? 0
+    const qqqNow   = nearestPrice(qqqHist, today) ?? qqqHist.at(-1)?.close ?? 0
+    const spyFinal = parseFloat((spyShares * spyNow).toFixed(2))
+    const qqqFinal = parseFloat((qqqShares * qqqNow).toFixed(2))
 
-    // Current portfolio value from positions
-    const tickers       = [...new Set(buys.map(b => b.ticker))]
-    const priceResults  = await Promise.all(tickers.map(t => fetchCurrentPrice(t)))
-    const priceMap      = Object.fromEntries(tickers.map((t, i) => [t, priceResults[i]]))
+    const tickers      = [...new Set(buys.map(b => b.ticker))]
+    const priceResults = await Promise.all(tickers.map(t => fetchCurrentPrice(t)))
+    const priceMap     = Object.fromEntries(tickers.map((t, i) => [t, priceResults[i]]))
 
-    // Derive current positions from all transactions
     const posMap = {}
     for (const t of transactions) {
       if (t.type === 'BUY') {
@@ -107,7 +101,6 @@ router.post('/benchmark', async (req, res, next) => {
     }
     portfolioFinal = parseFloat(portfolioFinal.toFixed(2))
 
-    // Add today to checkpoints
     checkpoints.push({
       date:      today,
       label:     'Hoy',
@@ -117,7 +110,6 @@ router.post('/benchmark', async (req, res, next) => {
       qqq:       qqqFinal,
     })
 
-    // Fill portfolio line: at intermediate points show invested capital
     const equity = checkpoints.map((c, i) => ({
       ...c,
       portfolio: c.portfolio ?? (i === checkpoints.length - 1 ? portfolioFinal : c.invested),
@@ -142,86 +134,29 @@ router.post('/benchmark', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-function getSupabase() {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_KEY
-  if (!url || !key || url.includes('xxxx')) return null
-  return createClient(url, key)
-}
-
-// GET /api/portfolio?userId=uuid
-router.get('/', async (req, res, next) => {
+// GET /api/portfolio — load user's portfolios (JSONB blob)
+router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const supabase = getSupabase()
-    if (!supabase) return res.status(503).json({ error: 'Supabase not configured' })
-
-    const { userId } = req.query
-    if (!userId) return res.status(400).json({ error: 'userId required' })
-
-    const { data, error } = await supabase
-      .from('positions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true })
-
-    if (error) throw error
-    res.json(data.map(p => ({
-      id:         p.id,
-      ticker:     p.ticker,
-      name:       p.name,
-      type:       p.type,
-      shares:     p.shares,
-      entryPrice: p.entry_price,
-      entryDate:  p.entry_date,
-      sector:     p.sector,
-      color:      p.color,
-      notes:      p.notes,
-    })))
+    const { rows } = await pool.query(
+      'SELECT data FROM portfolios WHERE user_id = $1',
+      [req.user.userId]
+    )
+    if (!rows.length) return res.json(null)
+    res.json(rows[0].data)
   } catch (err) { next(err) }
 })
 
-// POST /api/portfolio — create or replace all positions
-router.post('/', async (req, res, next) => {
+// POST /api/portfolio — save user's portfolios (JSONB blob)
+router.post('/', requireAuth, async (req, res, next) => {
   try {
-    const supabase = getSupabase()
-    if (!supabase) return res.status(503).json({ error: 'Supabase not configured' })
-
-    const { userId, positions } = req.body
-    if (!userId || !Array.isArray(positions)) return res.status(400).json({ error: 'userId and positions required' })
-
-    // Delete existing, then insert fresh (simple full-sync approach)
-    await supabase.from('positions').delete().eq('user_id', userId)
-
-    if (positions.length > 0) {
-      const rows = positions.map(p => ({
-        id:          p.id,
-        user_id:     userId,
-        ticker:      p.ticker,
-        name:        p.name,
-        type:        p.type,
-        shares:      p.shares,
-        entry_price: p.entryPrice,
-        entry_date:  p.entryDate,
-        sector:      p.sector,
-        color:       p.color,
-        notes:       p.notes ?? null,
-      }))
-      const { error } = await supabase.from('positions').insert(rows)
-      if (error) throw error
-    }
-
-    res.json({ ok: true })
-  } catch (err) { next(err) }
-})
-
-// DELETE /api/portfolio/:id
-router.delete('/:id', async (req, res, next) => {
-  try {
-    const supabase = getSupabase()
-    if (!supabase) return res.status(503).json({ error: 'Supabase not configured' })
-
-    const { error } = await supabase.from('positions').delete().eq('id', req.params.id)
-    if (error) throw error
+    const { portfolios } = req.body
+    if (!portfolios) return res.status(400).json({ error: 'portfolios required' })
+    await pool.query(
+      `INSERT INTO portfolios (user_id, data, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET data = $2::jsonb, updated_at = NOW()`,
+      [req.user.userId, JSON.stringify(portfolios)]
+    )
     res.json({ ok: true })
   } catch (err) { next(err) }
 })

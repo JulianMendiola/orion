@@ -30,13 +30,12 @@ export default function LoginPage() {
         navigate('/dashboard')
       } else {
         await signUp(email, password)
-        setSuccess('¡Cuenta creada! Revisá tu email para confirmar.')
-        setMode('login')
+        // Auto sign-in — navigate directly
+        navigate('/dashboard')
       }
     } catch (err) {
-      setError(err.message === 'Invalid login credentials'
-        ? 'Email o contraseña incorrectos.'
-        : err.message)
+      const msg = err.response?.data?.error ?? err.message
+      setError(msg)
     }
     setLoading(false)
   }
