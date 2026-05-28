@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    @apply bg-bg text-txt font-body;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border2 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted; }
+}
+
+@layer components {
+  /* Grain overlay */
+  .grain::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 0; opacity: .4;
+  }
+
+  /* Card base */
+  .card {
+    @apply bg-surface border border-border rounded-xl2;
+  }
+
+  /* Skeleton */
+  .skeleton {
+    @apply bg-s2 rounded animate-shimmer;
+    background-image: linear-gradient(90deg, #12131e 25%, #1c1d2e 50%, #12131e 75%);
+    background-size: 200% 100%;
+  }
+
+  /* Signal badges */
+  .badge-buy  { @apply bg-buy/10 text-buy border border-buy/20 font-mono text-xs uppercase tracking-wider px-3 py-1 rounded-full; }
+  .badge-sell { @apply bg-sell/10 text-sell border border-sell/20 font-mono text-xs uppercase tracking-wider px-3 py-1 rounded-full; }
+  .badge-hold { @apply bg-hold/10 text-hold border border-hold/20 font-mono text-xs uppercase tracking-wider px-3 py-1 rounded-full; }
+  .badge-wait { @apply bg-muted/10 text-muted2 border border-border2 font-mono text-xs uppercase tracking-wider px-3 py-1 rounded-full; }
+
+  /* Number colors */
+  .num-up   { @apply text-up; }
+  .num-down { @apply text-down; }
+  .num-flat { @apply text-muted2; }
+
+  /* Section label */
+  .section-label {
+    @apply font-mono text-[0.62rem] uppercase tracking-[0.18em] text-muted;
+  }
+}
