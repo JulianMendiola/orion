@@ -406,6 +406,126 @@ router.post('/backtest', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── GET /api/signals/smart-alerts — escaneo automático con caché 5 min ────────
+
+const QUALITY_TICKERS = new Set([
+  'AAPL','MSFT','NVDA','GOOGL','META','AMZN','TSLA','JPM','V','MA','UNH','LLY','ABBV','JNJ',
+])
+
+let _smartCache = null
+let _smartCacheTs = 0
+
+router.get('/smart-alerts', async (req, res, next) => {
+  try {
+    // Serve cache if fresh (5 min TTL)
+    if (_smartCache && Date.now() - _smartCacheTs < 5 * 60 * 1000) {
+      return res.json({ ..._smartCache, cached: true })
+    }
+
+    const results = []
+    for (let i = 0; i < RADAR_UNIVERSE.length; i += 5) {
+      const batch = RADAR_UNIVERSE.slice(i, i + 5)
+      const batch_results = await Promise.all(batch.map(async ticker => {
+        try {
+          const [meta, closes] = await Promise.all([fetchMeta(ticker), fetchHistory(ticker)])
+          const price    = meta.regularMarketPrice
+          const pctChg   = meta.regularMarketChangePercent
+          const rsiVal   = rsi(closes)
+          const sma20v   = sma(closes, 20)
+          const sma50v   = sma(closes, 50)
+          const sma200v  = sma(closes, 200)
+          const mom10v   = momentum(closes, 10)
+          const weekHigh = meta.fiftyTwoWeekHigh
+          const weekLow  = meta.fiftyTwoWeekLow
+          const dist52wL = weekLow  ? (price - weekLow)  / weekLow  * 100 : null
+          const dist52wH = weekHigh ? (weekHigh - price) / weekHigh * 100 : null
+          const isQuality = QUALITY_TICKERS.has(ticker)
+          const inds = {
+            rsi: rsiVal != null ? parseFloat(rsiVal.toFixed(1)) : null,
+            sma50: sma50v != null ? parseFloat(sma50v.toFixed(2)) : null,
+            sma200: sma200v != null ? parseFloat(sma200v.toFixed(2)) : null,
+            momentum10: mom10v != null ? parseFloat(mom10v.toFixed(2)) : null,
+            weekHigh, weekLow,
+          }
+
+          // ── Criterios ────────────────────────────────────
+          // 1. RSI extrema sobreventa + sobre SMA50 → compra de alta convicción
+          if (rsiVal !== null && rsiVal < 32 && sma50v && price > sma50v * 0.97) {
+            return {
+              type: 'BUY_OVERSOLD', action: 'COMPRAR', severity: 'high', conviction: 'ALTA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} — sobreventa extrema`,
+              description: `RSI ${rsiVal.toFixed(0)} en zona de rebote técnico con soporte SMA50 $${sma50v.toFixed(0)}. Presión compradora latente.`,
+              indicators: inds,
+            }
+          }
+          // 2. Activo de calidad cae 4%+ pero sobre SMA200 → comprar la caída
+          if (pctChg < -4 && isQuality && sma200v && price > sma200v * 0.92) {
+            return {
+              type: 'BUY_DIP', action: 'COMPRAR', severity: 'high', conviction: 'MEDIA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} cae ${pctChg.toFixed(1)}% — comprar la caída`,
+              description: `Corrección intradía en activo blue-chip con tendencia alcista estructural (sobre SMA200 $${sma200v.toFixed(0)}).`,
+              indicators: inds,
+            }
+          }
+          // 3. RSI 30-42 + sobre SMA50 + momentum mejorando → recuperación temprana
+          if (rsiVal !== null && rsiVal >= 30 && rsiVal <= 42 && sma50v && price > sma50v && mom10v !== null && mom10v > -4) {
+            return {
+              type: 'RECOVERY', action: 'COMPRAR', severity: 'medium', conviction: 'MEDIA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} — señal de recuperación`,
+              description: `RSI ${rsiVal.toFixed(0)} saliendo de sobreventa sobre SMA50. Momentum ${mom10v >= 0 ? '+' : ''}${mom10v.toFixed(1)}% — posible giro alcista.`,
+              indicators: inds,
+            }
+          }
+          // 4. Cerca del mínimo anual (< 7%) con RSI bajo → zona de acumulación
+          if (dist52wL !== null && dist52wL < 7 && rsiVal !== null && rsiVal < 45) {
+            return {
+              type: 'NEAR_52LOW', action: 'COMPRAR', severity: 'medium', conviction: 'BAJA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} — zona de acumulación histórica`,
+              description: `A ${dist52wL.toFixed(1)}% del mínimo de 52 semanas ($${weekLow?.toFixed(0)}) con RSI ${rsiVal.toFixed(0)}. Soporte técnico relevante.`,
+              indicators: inds,
+            }
+          }
+          // 5. RSI sobrecompra + cerca del máximo anual → tomar ganancias
+          if (rsiVal !== null && rsiVal > 75 && dist52wH !== null && dist52wH < 3) {
+            return {
+              type: 'TAKE_PROFIT', action: 'PRECAUCIÓN', severity: 'warning', conviction: 'MEDIA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} — sobrecompra en máximos anuales`,
+              description: `RSI ${rsiVal.toFixed(0)} a ${dist52wH.toFixed(1)}% del máximo de 52 semanas ($${weekHigh?.toFixed(0)}). Evaluar toma de ganancias.`,
+              indicators: inds,
+            }
+          }
+          // 6. Momentum fuerte + sobre todas las medias → breakout en curso
+          if (mom10v !== null && mom10v > 10 && sma20v && sma50v && price > sma20v && price > sma50v && rsiVal !== null && rsiVal > 45 && rsiVal < 72) {
+            return {
+              type: 'MOMENTUM', action: 'MANTENER', severity: 'info', conviction: 'MEDIA',
+              ticker, price: parseFloat(price.toFixed(2)), pct_change: parseFloat(pctChg.toFixed(2)),
+              title: `${ticker} — breakout de momentum`,
+              description: `+${mom10v.toFixed(1)}% en 10d sobre SMA20 y SMA50 con RSI ${rsiVal.toFixed(0)}. Tendencia en aceleración.`,
+              indicators: inds,
+            }
+          }
+          return null
+        } catch { return null }
+      }))
+      results.push(...batch_results.filter(Boolean))
+      if (i + 5 < RADAR_UNIVERSE.length) await new Promise(r => setTimeout(r, 200))
+    }
+
+    const SEV_ORDER = { high: 0, warning: 1, medium: 2, info: 3 }
+    results.sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])
+
+    const payload = { alerts: results.slice(0, 12), scanned: RADAR_UNIVERSE.length, ts: new Date().toISOString() }
+    _smartCache   = payload
+    _smartCacheTs = Date.now()
+    res.json(payload)
+  } catch (err) { next(err) }
+})
+
 // ── GET /api/signals/quick/:ticker  — indicadores rápidos para alertas técnicas
 router.get('/quick/:ticker', async (req, res, next) => {
   try {
