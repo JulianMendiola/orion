@@ -1,40 +1,37 @@
 import { Router } from 'express'
-import axios from 'axios'
+import yahooFinance from 'yahoo-finance2'
 import { pool } from '../db.js'
 import { requireAuth } from '../middleware/auth.js'
 
-const router = Router()
+const router  = Router()
+const YF_OPTS = { validateResult: false }
 
-const yf = axios.create({
-  baseURL: 'https://query1.finance.yahoo.com',
-  headers: { 'User-Agent': 'Mozilla/5.0 (compatible; orion-app/1.0)' },
-  timeout: 10000,
-})
+function rangeToDate(range) {
+  const days = { '1d': 2, '1mo': 31, '3mo': 92, '6mo': 183, '1y': 366, '2y': 732, '5y': 1827 }
+  return new Date(Date.now() - (days[range] ?? 732) * 86400 * 1000)
+}
 
 async function fetchHistory(ticker, range = '2y') {
-  const { data } = await yf.get(`/v8/finance/chart/${encodeURIComponent(ticker)}`, {
-    params: { interval: '1d', range },
-  })
-  const result     = data?.chart?.result?.[0]
-  const timestamps = result?.timestamp ?? []
-  const closes     = result?.indicators?.quote?.[0]?.close ?? []
-  return timestamps
-    .map((ts, i) => ({ date: new Date(ts * 1000).toISOString().slice(0, 10), close: closes[i] }))
-    .filter(d => d.close != null)
+  const period1 = rangeToDate(range)
+  const result  = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
+  return (result.quotes ?? [])
+    .filter(q => q.close != null)
+    .map(q => ({
+      date:  q.date instanceof Date ? q.date.toISOString().slice(0, 10) : new Date(q.date).toISOString().slice(0, 10),
+      close: q.close,
+    }))
 }
 
 async function fetchCurrentPrice(ticker) {
   try {
-    const { data } = await yf.get(`/v8/finance/chart/${encodeURIComponent(ticker)}`, {
-      params: { interval: '1d', range: '1d' },
-    })
-    return data?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null
+    const q = await yahooFinance.quote(ticker, {}, YF_OPTS)
+    return q?.regularMarketPrice ?? null
   } catch { return null }
 }
 
-function nearestPrice(history, targetDate) {
-  const sorted = history.filter(h => h.date <= targetDate)
-  return sorted.length ? sorted[sorted.length - 1].close : (history[0]?.close ?? null)
+function nearestPrice(hist, targetDate) {
+  const sorted = hist.filter(h => h.date <= targetDate)
+  return sorted.length ? sorted[sorted.length - 1].close : (hist[0]?.close ?? null)
 }
 
 // POST /api/portfolio/benchmark
