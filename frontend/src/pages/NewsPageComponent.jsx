@@ -5,7 +5,7 @@ import { usePortfolioStore } from '@/store/portfolioStore'
 import axios from 'axios'
 import clsx from 'clsx'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:4000' })
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api' })
 
 function timeAgo(ts) {
   if (!ts) return ''
@@ -22,7 +22,7 @@ export default function NewsPageComponent() {
   const [error, setError]     = useState(null)
   const [filter, setFilter]   = useState('todos')
 
-  const tickers = positions.map(p => p.ticker)
+  const tickers = (Array.isArray(positions) ? positions : []).map(p => p.ticker)
   const allTickers = [...new Set([...tickers, 'SPY', 'AAPL', 'NVDA'])]
 
   const load = async () => {
@@ -32,7 +32,7 @@ export default function NewsPageComponent() {
       const { data } = await api.get('/news', {
         params: { tickers: allTickers.join(',') }
       })
-      setNews(data)
+      setNews(Array.isArray(data) ? data : [])
     } catch {
       setError('No se pudieron cargar las noticias.')
     }
