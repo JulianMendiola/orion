@@ -1,7 +1,11 @@
 import axios from 'axios'
 
 // All API routes live under /api — match the same base as portfolioStore / authStore
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api' })
+// Timeout is 60s: signals endpoints scan 30 tickers and can be slow on Railway
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api',
+  timeout: 60000,
+})
 
 export const signalsService = {
   async generateSignals(tickers, entryPrices = {}) {

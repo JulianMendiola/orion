@@ -195,8 +195,8 @@ export default function SignalsPage() {
       setSignals(result)
       setBrief(briefResult)
       setTs(new Date().toLocaleTimeString('es-ES'))
-    } catch {
-      setError('No se pudo conectar con el backend. Verificá que esté corriendo en el puerto 4000.')
+    } catch (e) {
+      setError(e.response?.data?.error ?? e.message ?? 'No se pudo conectar con el backend.')
     }
     setLoading(false)
   }
@@ -208,8 +208,8 @@ export default function SignalsPage() {
       const result  = await signalsService.getOpportunities(exclude)
       setOpps(result.opportunities ?? [])
       setWatchlist(result.watchlist ?? [])
-    } catch {
-      setError('Error al escanear el mercado.')
+    } catch (e) {
+      setError(e.response?.data?.error ?? e.message ?? 'Error al escanear el mercado.')
     }
     setLoadingOpp(false)
   }

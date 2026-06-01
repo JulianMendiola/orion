@@ -63,7 +63,7 @@ export default function BacktestPage() {
       if (data.error) throw new Error(data.error)
       setResult(data)
     } catch (e) {
-      setError(e.message ?? 'Error al ejecutar el backtest.')
+      setError(e.response?.data?.error ?? e.message ?? 'Error al ejecutar el backtest.')
     }
     setLoading(false)
   }

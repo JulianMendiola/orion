@@ -57,22 +57,26 @@ async function fetchMeta(ticker) {
 }
 
 async function fetchHistory(ticker, range = '1y') {
-  const period1 = rangeToDate(range)
-  const result  = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
-  return (result.quotes ?? [])
-    .filter(q => q.close != null)
-    .map(q => q.close)
+  try {
+    const period1 = rangeToDate(range)
+    const result  = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
+    return (result.quotes ?? [])
+      .filter(q => q.close != null)
+      .map(q => q.close)
+  } catch { return [] }
 }
 
 async function fetchHistoryFull(ticker, range = '1y') {
-  const period1 = rangeToDate(range)
-  const result  = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
-  return (result.quotes ?? [])
-    .filter(q => q.close != null)
-    .map(q => ({
-      date:  q.date instanceof Date ? q.date.toISOString().slice(0, 10) : new Date(q.date).toISOString().slice(0, 10),
-      close: q.close,
-    }))
+  try {
+    const period1 = rangeToDate(range)
+    const result  = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
+    return (result.quotes ?? [])
+      .filter(q => q.close != null)
+      .map(q => ({
+        date:  q.date instanceof Date ? q.date.toISOString().slice(0, 10) : new Date(q.date).toISOString().slice(0, 10),
+        close: q.close,
+      }))
+  } catch { return [] }
 }
 
 // ── Lógica de señal ──────────────────────────────────────
@@ -165,6 +169,9 @@ function analyzeAsset({ ticker, price, pct, closes, entryPrice, weekHigh, weekLo
     },
   }
 }
+
+// ── GET /api/signals/health ──────────────────────────────
+router.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
 // ── POST /api/signals/generate ───────────────────────────
 
