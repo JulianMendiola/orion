@@ -1,15 +1,11 @@
 import { Router } from 'express'
 import axios from 'axios'
 import { XMLParser } from 'fast-xml-parser'
+import yahooFinance from 'yahoo-finance2'
 
 const router  = Router()
 const parser  = new XMLParser({ ignoreAttributes: false, cdataPropName: '__cdata' })
-
-const yf2 = axios.create({
-  baseURL: 'https://query2.finance.yahoo.com',
-  headers: { 'User-Agent': 'Mozilla/5.0 (compatible; orion-app/1.0)' },
-  timeout: 8000,
-})
+const YF_OPTS = { validateResult: false }
 
 const rssClient = axios.create({
   timeout: 7000,
@@ -66,14 +62,12 @@ router.get('/', async (req, res, next) => {
   try {
     const tickers = (req.query.tickers ?? 'SPY,AAPL,NVDA,META').split(',').filter(Boolean)
 
-    // Yahoo Finance news + RSS argentinas en paralelo
+    // Yahoo Finance news (via yahoo-finance2) + RSS argentinas en paralelo
     const [yahooResults, ...rssResults] = await Promise.all([
       Promise.all(tickers.map(async t => {
         try {
-          const { data } = await yf2.get('/v1/finance/search', {
-            params: { q: t, newsCount: 5, quotesCount: 0 },
-          })
-          return (data?.news ?? []).map(n => ({ ...n, queryTicker: t }))
+          const result = await yahooFinance.search(t, { newsCount: 5, quotesCount: 0 }, YF_OPTS)
+          return (result.news ?? []).map(n => ({ ...n, queryTicker: t }))
         } catch { return [] }
       })),
       ...AR_SOURCES.map(fetchRSS),
@@ -93,7 +87,9 @@ router.get('/', async (req, res, next) => {
         title:     n.title,
         publisher: n.publisher,
         url:       n.link,
-        time:      n.providerPublishTime,
+        time:      n.providerPublishTime instanceof Date
+          ? Math.floor(n.providerPublishTime.getTime() / 1000)
+          : n.providerPublishTime,
         ticker:    n.queryTicker,
         thumbnail: n.thumbnail?.resolutions?.[0]?.url ?? null,
         country:   'US',

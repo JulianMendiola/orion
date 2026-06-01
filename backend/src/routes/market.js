@@ -1,33 +1,21 @@
 import { Router } from 'express'
 import axios from 'axios'
+import yahooFinance from 'yahoo-finance2'
 
 const router = Router()
 
-const yf = axios.create({
-  baseURL: 'https://query1.finance.yahoo.com',
-  headers: { 'User-Agent': 'Mozilla/5.0 (compatible; orion-app/1.0)' },
-  timeout: 8000,
-})
+// Suppress yahoo-finance2 validation noise
+const YF_OPTS = { validateResult: false }
 
-const yf2 = axios.create({
-  baseURL: 'https://query2.finance.yahoo.com',
-  headers: { 'User-Agent': 'Mozilla/5.0 (compatible; orion-app/1.0)' },
-  timeout: 8000,
-})
+function rangeToDate(range) {
+  const days = { '1d': 2, '5d': 7, '1mo': 31, '3mo': 92, '6mo': 183, '1y': 366, '2y': 732, '5y': 1827 }
+  const d = days[range] ?? 366
+  return new Date(Date.now() - d * 86400 * 1000)
+}
 
-// Fetch quote snapshot from Yahoo chart API (works without crumb)
 async function fetchQuote(symbol) {
-  const { data } = await yf.get(`/v8/finance/chart/${encodeURIComponent(symbol)}`, {
-    params: { interval: '1d', range: '1d', includePrePost: false },
-  })
-  const meta = data?.chart?.result?.[0]?.meta
-  if (!meta) throw new Error(`No data for ${symbol}`)
-  // Chart API doesn't include changePercent — derive it from previousClose
-  const prev = meta.chartPreviousClose
-  const cur  = meta.regularMarketPrice
-  meta.regularMarketChange        = prev ? (cur - prev) : 0
-  meta.regularMarketChangePercent = prev ? ((cur - prev) / prev) * 100 : 0
-  return meta
+  const q = await yahooFinance.quote(symbol, {}, YF_OPTS)
+  return q
 }
 
 // GET /api/market/indices
@@ -39,9 +27,9 @@ router.get('/indices', async (_req, res, next) => {
       fetchQuote('BTC-USD'),
     ])
     res.json({
-      sp500:  { price: sp500.regularMarketPrice?.toLocaleString('en-US'),  pct: sp500.regularMarketChangePercent },
-      nasdaq: { price: nasdaq.regularMarketPrice?.toLocaleString('en-US'), pct: nasdaq.regularMarketChangePercent },
-      btc:    { price: btc.regularMarketPrice?.toLocaleString('en-US'),    pct: btc.regularMarketChangePercent },
+      sp500:  { price: sp500.regularMarketPrice?.toLocaleString('en-US'),  pct: sp500.regularMarketChangePercent  ?? 0 },
+      nasdaq: { price: nasdaq.regularMarketPrice?.toLocaleString('en-US'), pct: nasdaq.regularMarketChangePercent ?? 0 },
+      btc:    { price: btc.regularMarketPrice?.toLocaleString('en-US'),    pct: btc.regularMarketChangePercent    ?? 0 },
     })
   } catch (err) { next(err) }
 })
@@ -54,17 +42,17 @@ router.get('/quotes', async (req, res, next) => {
 
     const results = await Promise.all(tickers.map(t => fetchQuote(t).catch(() => null)))
     const out = {}
-    results.forEach((meta, i) => {
-      if (!meta) return
+    results.forEach((q, i) => {
+      if (!q) return
       out[tickers[i]] = {
-        ticker:  tickers[i],
-        price:   meta.regularMarketPrice,
-        pct:     meta.regularMarketChangePercent,
-        change:  meta.regularMarketChange,
-        volume:  meta.regularMarketVolume,
-        high:    meta.regularMarketDayHigh,
-        low:     meta.regularMarketDayLow,
-        mktCap:  meta.marketCap,
+        ticker: tickers[i],
+        price:  q.regularMarketPrice,
+        pct:    q.regularMarketChangePercent ?? 0,
+        change: q.regularMarketChange ?? 0,
+        volume: q.regularMarketVolume,
+        high:   q.regularMarketDayHigh,
+        low:    q.regularMarketDayLow,
+        mktCap: q.marketCap,
       }
     })
     res.json(out)
@@ -75,21 +63,18 @@ router.get('/quotes', async (req, res, next) => {
 router.get('/history/:ticker', async (req, res, next) => {
   try {
     const { ticker } = req.params
-    const rangeMap = { '1mo': '1mo', '3mo': '3mo', '6mo': '6mo', '1y': '1y' }
-    const range = rangeMap[req.query.range] ?? '3mo'
+    const range  = req.query.range ?? '3mo'
+    const period1 = rangeToDate(range)
 
-    const { data } = await yf.get(`/v8/finance/chart/${encodeURIComponent(ticker)}`, {
-      params: { interval: '1d', range },
-    })
-
-    const result     = data?.chart?.result?.[0]
-    const timestamps = result?.timestamp ?? []
-    const closes     = result?.indicators?.quote?.[0]?.close ?? []
-    const volumes    = result?.indicators?.quote?.[0]?.volume ?? []
-
-    const out = timestamps
-      .map((ts, i) => ({ date: new Date(ts * 1000).toISOString(), close: closes[i], volume: volumes[i] }))
-      .filter(d => d.close != null)
+    const result = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
+    const quotes = result.quotes ?? []
+    const out = quotes
+      .filter(q => q.close != null)
+      .map(q => ({
+        date:   q.date instanceof Date ? q.date.toISOString() : new Date(q.date).toISOString(),
+        close:  q.close,
+        volume: q.volume,
+      }))
 
     res.json(out)
   } catch (err) { next(err) }
@@ -113,13 +98,13 @@ router.get('/forex', async (req, res, next) => {
     const pairs = (req.query.pairs ?? 'EURUSD=X,GBPUSD=X,USDJPY=X,USDARS=X,USDBRL=X,USDCAD=X').split(',').filter(Boolean)
     const results = await Promise.all(pairs.map(p => fetchQuote(p).catch(() => null)))
     const out = {}
-    results.forEach((meta, i) => {
-      if (!meta) return
+    results.forEach((q, i) => {
+      if (!q) return
       out[pairs[i]] = {
         ticker: pairs[i],
-        price:  meta.regularMarketPrice,
-        pct:    meta.regularMarketChangePercent,
-        change: meta.regularMarketChange,
+        price:  q.regularMarketPrice,
+        pct:    q.regularMarketChangePercent ?? 0,
+        change: q.regularMarketChange ?? 0,
       }
     })
     res.json(out)
@@ -129,11 +114,9 @@ router.get('/forex', async (req, res, next) => {
 // GET /api/market/search?q=apple
 router.get('/search', async (req, res, next) => {
   try {
-    const q = req.query.q ?? ''
-    const { data } = await yf2.get('/v1/finance/search', {
-      params: { q, quotesCount: 8, newsCount: 0 },
-    })
-    res.json(data?.quotes?.slice(0, 8) ?? [])
+    const q      = req.query.q ?? ''
+    const result = await yahooFinance.search(q, { quotesCount: 8, newsCount: 0 }, YF_OPTS)
+    res.json(result.quotes?.slice(0, 8) ?? [])
   } catch (err) { next(err) }
 })
 
