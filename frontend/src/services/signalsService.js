@@ -23,8 +23,8 @@ export const signalsService = {
     return data
   },
 
-  async backtest(ticker, range = '1y') {
-    const { data } = await api.post('/signals/backtest', { ticker, range })
+  async backtest(ticker, range = '1y', strategy = 'rsi_sma', commission = 0) {
+    const { data } = await api.post('/signals/backtest', { ticker, range, strategy, commission })
     return data
   },
 

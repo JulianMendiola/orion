@@ -303,33 +303,169 @@ router.post('/brief', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── Estrategias de backtest ──────────────────────────────
+// Devuelve 'BUY' | 'SELL' | null para cada barra
+// closes: array de precios de cierre hasta i (inclusive)
+// history[i]: { date, close, volume? }
+
+function stratRsiSma(closes) {
+  const rsiVal = rsi(closes)
+  const sma20v = sma(closes, 20)
+  const sma50v = sma(closes, 50)
+  const price  = closes[closes.length - 1]
+  if (rsiVal === null) return null
+  if (rsiVal < 35 && sma50v && price > sma50v * 0.96)  return 'BUY'
+  if (rsiVal > 70 || (rsiVal > 65 && sma20v && price < sma20v)) return 'SELL'
+  return null
+}
+
+function stratRocVolume(closes, volumes) {
+  if (closes.length < 6) return null
+  const price   = closes[closes.length - 1]
+  const prev3   = closes[closes.length - 4]
+  const prev5   = closes[closes.length - 6]
+  const roc3    = ((price - prev3) / prev3) * 100
+  const roc5    = ((price - prev5) / prev5) * 100
+  // Relative volume (vs 20-day avg)
+  let relVol = null
+  if (volumes && volumes.length >= 20) {
+    const avgVol = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
+    relVol = avgVol > 0 ? volumes[volumes.length - 1] / avgVol : null
+  }
+  const pricePrev = closes[closes.length - 2]
+  const isGreen   = price > pricePrev
+  if (roc3 > 10 || (relVol !== null && relVol > 2 && isGreen)) return 'SELL'  // tomar ganancias
+  if (roc5 < -8 && (relVol === null || relVol < 1.5)) return 'BUY'            // comprar caída
+  return null
+}
+
+function stratBollinger(closes) {
+  if (closes.length < 22) return null
+  const slice  = closes.slice(-20)
+  const mean   = slice.reduce((a, b) => a + b, 0) / 20
+  const stdDev = Math.sqrt(slice.reduce((a, b) => a + (b - mean) ** 2, 0) / 20)
+  const upper  = mean + 2.5 * stdDev
+  const lower  = mean - 2.0 * stdDev
+  const price  = closes[closes.length - 1]
+  if (price < lower) return 'BUY'
+  if (price > upper) return 'SELL'
+  return null
+}
+
+function stratMomentumBreakout(closes) {
+  if (closes.length < 52) return null
+  const price   = closes[closes.length - 1]
+  const high52  = Math.max(...closes.slice(-52))
+  const sma20v  = sma(closes, 20)
+  const sma50v  = sma(closes, 50)
+  const mom10v  = momentum(closes, 10)
+  // Breakout: nuevo máximo de 52 semanas con SMA alineadas
+  if (price >= high52 * 0.99 && sma20v && sma50v && price > sma20v && price > sma50v && mom10v > 5) return 'BUY'
+  // Salida: momentum se revierte
+  if (mom10v !== null && mom10v < -5) return 'SELL'
+  return null
+}
+
 // ── POST /api/signals/backtest ───────────────────────────
+
+const STRATEGIES = {
+  rsi_sma:    { label: 'RSI + SMA',           fn: (closes)          => stratRsiSma(closes) },
+  roc_volume: { label: 'ROC + Volumen',        fn: (closes, volumes) => stratRocVolume(closes, volumes) },
+  bollinger:  { label: 'Bandas de Bollinger',  fn: (closes)          => stratBollinger(closes) },
+  momentum:   { label: 'Momentum Breakout',    fn: (closes)          => stratMomentumBreakout(closes) },
+}
+
+function calcSharpe(equityArr, capital) {
+  if (equityArr.length < 2) return null
+  const returns = []
+  for (let i = 1; i < equityArr.length; i++) {
+    returns.push((equityArr[i] - equityArr[i - 1]) / equityArr[i - 1])
+  }
+  const mean   = returns.reduce((a, b) => a + b, 0) / returns.length
+  const stdDev = Math.sqrt(returns.reduce((a, b) => a + (b - mean) ** 2, 0) / returns.length)
+  if (stdDev === 0) return null
+  return parseFloat((mean / stdDev * Math.sqrt(252)).toFixed(2))
+}
+
+function calcSortino(equityArr) {
+  if (equityArr.length < 2) return null
+  const returns = []
+  for (let i = 1; i < equityArr.length; i++) {
+    returns.push((equityArr[i] - equityArr[i - 1]) / equityArr[i - 1])
+  }
+  const mean        = returns.reduce((a, b) => a + b, 0) / returns.length
+  const downsideRet = returns.filter(r => r < 0)
+  if (!downsideRet.length) return null
+  const downDev = Math.sqrt(downsideRet.reduce((a, b) => a + b ** 2, 0) / downsideRet.length)
+  if (downDev === 0) return null
+  return parseFloat((mean / downDev * Math.sqrt(252)).toFixed(2))
+}
 
 router.post('/backtest', async (req, res, next) => {
   try {
-    const { ticker, range = '1y', capital = 10000 } = req.body
-    const history = await fetchHistoryFull(ticker, range)
+    const { ticker, range = '1y', capital = 10000, strategy = 'rsi_sma', commission = 0 } = req.body
+    const strat = STRATEGIES[strategy] ?? STRATEGIES.rsi_sma
+
+    // Fetch history — also grab volumes for roc_volume strategy
+    const period1 = rangeToDate(range)
+    let history = []
+    try {
+      const result = await yahooFinance.chart(ticker, { period1, interval: '1d' }, YF_OPTS)
+      history = (result.quotes ?? [])
+        .filter(q => q.close != null)
+        .map(q => ({
+          date:   q.date instanceof Date ? q.date.toISOString().slice(0, 10) : new Date(q.date).toISOString().slice(0, 10),
+          close:  q.close,
+          volume: q.volume ?? 0,
+        }))
+    } catch { /* returns [] */ }
 
     if (history.length < 55) {
-      return res.json({ error: 'Datos insuficientes para backtesting' })
+      return res.json({ error: 'Datos insuficientes para backtesting. Probá un período más largo o un ticker diferente.' })
     }
 
-    const startIdx = Math.min(50, history.length - 10)
-    let cash = capital
-    let shares = 0
-    const equity  = []
-    const trades  = []
-    let costBasis = 0
+    // Fetch SPY for Macro Guard (skip if ticker IS SPY)
+    let spyHistory = []
+    if (ticker.toUpperCase() !== 'SPY') {
+      try {
+        const spyResult = await yahooFinance.chart('SPY', { period1, interval: '1d' }, YF_OPTS)
+        spyHistory = (spyResult.quotes ?? []).filter(q => q.close != null).map(q => ({
+          date:  q.date instanceof Date ? q.date.toISOString().slice(0, 10) : new Date(q.date).toISOString().slice(0, 10),
+          close: q.close,
+        }))
+      } catch { /* no macro guard */ }
+    }
+    const spyByDate = Object.fromEntries(spyHistory.map(h => [h.date, h.close]))
+
+    const commRate = (commission ?? 0) / 100  // e.g. 0.4% → 0.004
+    const startIdx = Math.min(55, history.length - 10)
+    let cash = capital, shares = 0, costBasis = 0
+    const equity = [], trades = []
+    let macroBlockUntil = -1   // Macro Guard: bar index until which entries are blocked
 
     for (let i = startIdx; i < history.length; i++) {
-      const { date, close: price } = history[i]
-      const closes   = history.slice(0, i + 1).map(h => h.close)
-      const wSlice   = closes.slice(-252)
-      const weekHigh = Math.max(...wSlice)
-      const weekLow  = Math.min(...wSlice)
+      const { date, close: price, volume } = history[i]
+      const closes  = history.slice(0, i + 1).map(h => h.close)
+      const volumes = history.slice(0, i + 1).map(h => h.volume)
 
-      const result = analyzeAsset({ ticker, price, pct: 0, closes, weekHigh, weekLow })
+      // ── Macro Guard: si SPY cae >7.8% hoy, salir y bloquear 8 barras ──
+      const spyPrev = i > 0 ? spyByDate[history[i - 1].date] : null
+      const spyNow  = spyByDate[date]
+      if (spyPrev && spyNow && ((spyNow - spyPrev) / spyPrev * 100) < -7.8) {
+        if (shares > 0) {
+          const saleValue = shares * price * (1 - commRate)
+          trades.push({
+            type: 'SELL', date, price: parseFloat(price.toFixed(2)),
+            pnl:  parseFloat((saleValue - costBasis).toFixed(2)),
+            pct:  parseFloat(((saleValue - costBasis) / costBasis * 100).toFixed(2)),
+            exit: 'Macro Guard',
+          })
+          cash = saleValue; shares = 0
+        }
+        macroBlockUntil = i + 8
+      }
 
+      const signal = strat.fn(closes, volumes)
       const portfolioValue = cash + shares * price
       const buyHoldValue   = capital * (price / history[startIdx].close)
 
@@ -337,31 +473,37 @@ router.post('/backtest', async (req, res, next) => {
         date,
         strat:   parseFloat(portfolioValue.toFixed(2)),
         buyHold: parseFloat(buyHoldValue.toFixed(2)),
-        signal:  result.signal,
+        signal,
       })
 
-      if (result.signal === 'COMPRAR' && shares === 0 && cash > 0) {
-        shares    = cash / price
-        costBasis = cash
-        cash      = 0
-        trades.push({ type: 'BUY', date, price: parseFloat(price.toFixed(2)) })
-      } else if (result.signal === 'PRECAUCIÓN' && shares > 0) {
-        const saleValue = shares * price
+      // ── Entry ──
+      if (signal === 'BUY' && shares === 0 && cash > 0 && i > macroBlockUntil) {
+        const cost  = cash * commRate
+        shares      = (cash - cost) / price
+        costBasis   = cash - cost
+        cash        = 0
+        trades.push({ type: 'BUY', date, price: parseFloat(price.toFixed(2)), commission: parseFloat(cost.toFixed(2)) })
+      }
+      // ── Exit ──
+      else if (signal === 'SELL' && shares > 0) {
+        const gross     = shares * price
+        const cost      = gross * commRate
+        const saleValue = gross - cost
         trades.push({
-          type:  'SELL',
-          date,
-          price: parseFloat(price.toFixed(2)),
-          pnl:   parseFloat((saleValue - costBasis).toFixed(2)),
-          pct:   parseFloat(((saleValue - costBasis) / costBasis * 100).toFixed(2)),
+          type: 'SELL', date, price: parseFloat(price.toFixed(2)),
+          pnl:  parseFloat((saleValue - costBasis).toFixed(2)),
+          pct:  parseFloat(((saleValue - costBasis) / costBasis * 100).toFixed(2)),
+          exit: 'Señal técnica',
+          commission: parseFloat(cost.toFixed(2)),
         })
-        cash   = saleValue
-        shares = 0
+        cash = saleValue; shares = 0
       }
     }
 
     const lastPrice  = history[history.length - 1].close
     const finalValue = cash + shares * lastPrice
 
+    // ── Métricas ──
     let peak = capital, maxDrawdown = 0
     equity.forEach(e => {
       if (e.strat > peak) peak = e.strat
@@ -369,19 +511,49 @@ router.post('/backtest', async (req, res, next) => {
       if (dd > maxDrawdown) maxDrawdown = dd
     })
 
-    const sellTrades = trades.filter(t => t.type === 'SELL')
-    const wins       = sellTrades.filter(t => t.pnl > 0).length
-    const winRate    = sellTrades.length ? (wins / sellTrades.length * 100) : null
+    const sellTrades  = trades.filter(t => t.type === 'SELL')
+    const wins        = sellTrades.filter(t => t.pnl > 0)
+    const losses      = sellTrades.filter(t => t.pnl <= 0)
+    const winRate     = sellTrades.length ? (wins.length / sellTrades.length * 100) : null
+    const grossProfit = wins.reduce((a, b) => a + b.pnl, 0)
+    const grossLoss   = Math.abs(losses.reduce((a, b) => a + b.pnl, 0))
+    const profitFactor = grossLoss > 0 ? parseFloat((grossProfit / grossLoss).toFixed(2)) : null
+    const avgWin       = wins.length   ? parseFloat((grossProfit / wins.length).toFixed(2))  : null
+    const avgLoss      = losses.length ? parseFloat((grossLoss   / losses.length).toFixed(2)) : null
+
+    // Trade duration (días entre BUY y SELL)
+    let totalDays = 0, durationCount = 0
+    for (let i = 0; i < trades.length - 1; i++) {
+      if (trades[i].type === 'BUY' && trades[i + 1].type === 'SELL') {
+        const days = Math.round((new Date(trades[i + 1].date) - new Date(trades[i].date)) / 86400000)
+        totalDays += days; durationCount++
+      }
+    }
+    const avgDuration = durationCount ? Math.round(totalDays / durationCount) : null
+
+    const equityValues = equity.map(e => e.strat)
+    const sharpe  = calcSharpe(equityValues, capital)
+    const sortino = calcSortino(equityValues)
+
+    // Downsample equity para el gráfico (~300 pts max)
+    const step = Math.max(1, Math.floor(equity.length / 300))
+    const equityChart = equity.filter((_, i) => i % step === 0 || i === equity.length - 1)
 
     res.json({
-      ticker, range,
+      ticker, range, strategy, strategyLabel: strat.label,
+      commission,
       stratReturn:   parseFloat(((finalValue - capital) / capital * 100).toFixed(2)),
       buyHoldReturn: parseFloat(((lastPrice - history[startIdx].close) / history[startIdx].close * 100).toFixed(2)),
       finalValue:    parseFloat(finalValue.toFixed(2)),
       maxDrawdown:   parseFloat(maxDrawdown.toFixed(2)),
       tradesCount:   trades.length,
-      winRate:       winRate !== null ? parseFloat(winRate.toFixed(1)) : null,
-      equity,
+      winRate:       winRate  !== null ? parseFloat(winRate.toFixed(1)) : null,
+      profitFactor,
+      sharpe,
+      sortino,
+      avgWin, avgLoss,
+      avgDuration,
+      equity: equityChart,
       trades,
     })
   } catch (err) { next(err) }

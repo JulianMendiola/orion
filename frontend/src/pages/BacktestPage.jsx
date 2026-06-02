@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts'
-import { FlaskConical, TrendingUp, TrendingDown, ArrowUpDown, ShieldAlert } from 'lucide-react'
+import { FlaskConical, TrendingUp, TrendingDown, ArrowUpDown, ShieldAlert, Info } from 'lucide-react'
 import { Card, SectionLabel, Button } from '@/components/ui'
 import { signalsService } from '@/services/signalsService'
 import { fmt } from '@/utils/formatters'
@@ -9,19 +9,58 @@ import clsx from 'clsx'
 const RANGES = ['3mo', '6mo', '1y', '2y']
 const RANGE_LABEL = { '3mo': '3 meses', '6mo': '6 meses', '1y': '1 año', '2y': '2 años' }
 
-function MetricCard({ label, value, sub, positive, icon: Icon }) {
+const STRATEGIES = [
+  {
+    id:    'rsi_sma',
+    label: 'RSI + SMA',
+    desc:  'Compra en sobreventa (RSI<35) sobre SMA50 · Vende en sobrecompra (RSI>70)',
+    tags:  ['RSI 14', 'SMA 20', 'SMA 50'],
+  },
+  {
+    id:    'roc_volume',
+    label: 'ROC + Volumen',
+    desc:  'Compra caídas con bajo volumen · Sale cuando ROC>10% o spike de volumen 2x',
+    tags:  ['ROC 3d', 'ROC 5d', 'Vol relativo'],
+  },
+  {
+    id:    'bollinger',
+    label: 'Bollinger Bands',
+    desc:  'Compra en toque de banda inferior (−2σ) · Sale en toque de banda superior (+2.5σ)',
+    tags:  ['SMA 20', '±2σ', 'Reversión a media'],
+  },
+  {
+    id:    'momentum',
+    label: 'Momentum Breakout',
+    desc:  'Compra breakout de máximos 52 semanas con SMA alineadas · Sale cuando momentum revierte',
+    tags:  ['Máx 52s', 'SMA 20/50', 'Momentum 10d'],
+  },
+]
+
+function MetricCard({ label, value, sub, positive, icon: Icon, tooltip }) {
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="font-mono text-[0.6rem] text-muted uppercase tracking-wider mb-1">{label}</div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1 mb-1">
+            <div className="font-mono text-[0.6rem] text-muted uppercase tracking-wider">{label}</div>
+            {tooltip && (
+              <div className="group relative">
+                <Info size={9} className="text-muted cursor-default" />
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:block z-20 w-44">
+                  <div className="bg-surface border border-border rounded-lg px-2.5 py-2 shadow-xl">
+                    <p className="font-mono text-[0.6rem] text-muted2 leading-relaxed">{tooltip}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
           <div className={clsx(
             'font-mono text-xl font-semibold',
             positive === true ? 'text-buy' : positive === false ? 'text-sell' : 'text-txt'
           )}>
             {value}
           </div>
-          {sub && <div className="font-mono text-xs text-muted mt-0.5">{sub}</div>}
+          {sub && <div className="font-mono text-xs text-muted mt-0.5 truncate">{sub}</div>}
         </div>
         {Icon && <Icon size={18} className="text-muted mt-1 shrink-0" strokeWidth={1.5} />}
       </div>
@@ -46,11 +85,13 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 export default function BacktestPage() {
-  const [ticker, setTicker] = useState('')
-  const [range, setRange]   = useState('1y')
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState(null)
+  const [ticker, setTicker]     = useState('')
+  const [range, setRange]       = useState('1y')
+  const [strategy, setStrategy] = useState('rsi_sma')
+  const [commission, setCommission] = useState('0.1')
+  const [result, setResult]     = useState(null)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState(null)
 
   const run = async () => {
     const t = ticker.toUpperCase().trim()
@@ -59,7 +100,7 @@ export default function BacktestPage() {
     setError(null)
     setResult(null)
     try {
-      const data = await signalsService.backtest(t, range)
+      const data = await signalsService.backtest(t, range, strategy, parseFloat(commission) || 0)
       if (data.error) throw new Error(data.error)
       setResult(data)
     } catch (e) {
@@ -69,28 +110,61 @@ export default function BacktestPage() {
   }
 
   const stratBetter = result ? result.stratReturn > result.buyHoldReturn : null
+  const activeStrat = STRATEGIES.find(s => s.id === strategy)
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="font-display font-extrabold text-2xl tracking-tight">Backtesting</h1>
-        <p className="text-muted2 text-sm mt-0.5">Simulá el rendimiento histórico de las señales técnicas</p>
+        <p className="text-muted2 text-sm mt-0.5">Simulá el rendimiento histórico de 4 estrategias técnicas con Macro Guard</p>
       </div>
 
-      {/* Config */}
-      <Card className="p-5">
+      {/* ── Configuración ── */}
+      <Card className="p-5 space-y-4">
+
+        {/* Estrategia */}
+        <div>
+          <label className="font-mono text-[0.6rem] text-muted uppercase tracking-wider block mb-2">Estrategia</label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {STRATEGIES.map(s => (
+              <button
+                key={s.id}
+                onClick={() => setStrategy(s.id)}
+                className={clsx(
+                  'text-left p-3 rounded-xl border transition-all',
+                  strategy === s.id
+                    ? 'bg-buy/10 border-buy/40 text-buy'
+                    : 'bg-s2 border-border text-muted2 hover:text-txt hover:border-border2'
+                )}
+              >
+                <div className="font-mono text-xs font-medium mb-1">{s.label}</div>
+                <div className="flex flex-wrap gap-1">
+                  {s.tags.map(t => (
+                    <span key={t} className="font-mono text-[0.55rem] bg-s3 text-muted px-1.5 py-0.5 rounded">{t}</span>
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+          {activeStrat && (
+            <p className="font-mono text-[0.65rem] text-muted mt-2 px-1">{activeStrat.desc}</p>
+          )}
+        </div>
+
+        {/* Ticker + Rango + Comisión + Botón */}
         <div className="flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[140px]">
+          <div className="flex-1 min-w-[130px]">
             <label className="font-mono text-[0.6rem] text-muted uppercase tracking-wider block mb-1.5">Ticker</label>
             <input
               type="text"
               value={ticker}
               onChange={e => setTicker(e.target.value.toUpperCase())}
               onKeyDown={e => e.key === 'Enter' && run()}
-              placeholder="AAPL, NVDA, META…"
+              placeholder="AAPL, NVDA, SPY…"
               className="w-full bg-s2 border border-border text-txt text-sm font-mono px-3 py-2 rounded-lg outline-none focus:border-buy/50 placeholder:text-muted"
             />
           </div>
+
           <div>
             <label className="font-mono text-[0.6rem] text-muted uppercase tracking-wider block mb-1.5">Período</label>
             <div className="flex gap-1.5">
@@ -110,6 +184,21 @@ export default function BacktestPage() {
               ))}
             </div>
           </div>
+
+          <div className="w-28">
+            <label className="font-mono text-[0.6rem] text-muted uppercase tracking-wider block mb-1.5">Comisión %</label>
+            <input
+              type="number"
+              value={commission}
+              onChange={e => setCommission(e.target.value)}
+              step="0.05"
+              min="0"
+              max="2"
+              placeholder="0.1"
+              className="w-full bg-s2 border border-border text-txt text-sm font-mono px-3 py-2 rounded-lg outline-none focus:border-buy/50 placeholder:text-muted"
+            />
+          </div>
+
           <Button onClick={run} loading={loading} disabled={!ticker.trim()}>
             <FlaskConical size={14} />
             Simular
@@ -126,14 +215,15 @@ export default function BacktestPage() {
       {loading && (
         <Card className="p-12 text-center">
           <div className="w-8 h-8 border-2 border-buy border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-muted2 text-sm">Simulando señales históricas…</p>
-          <p className="font-mono text-xs text-muted mt-1">Esto puede tomar unos segundos</p>
+          <p className="text-muted2 text-sm">Simulando estrategia {activeStrat?.label}…</p>
+          <p className="font-mono text-xs text-muted mt-1">Calculando Sharpe · Sortino · Drawdown · Profit Factor</p>
         </Card>
       )}
 
       {result && !loading && (
         <div className="space-y-6">
-          {/* Veredicto */}
+
+          {/* ── Veredicto ── */}
           <Card className={clsx('p-5 border', stratBetter ? 'border-buy/30 bg-buy/5' : 'border-sell/20 bg-sell/5')}>
             <div className="flex items-start gap-3">
               <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center shrink-0', stratBetter ? 'bg-buy/20' : 'bg-sell/20')}>
@@ -141,24 +231,27 @@ export default function BacktestPage() {
               </div>
               <div>
                 <div className={clsx('font-mono text-xs font-medium mb-1', stratBetter ? 'text-buy' : 'text-sell')}>
-                  {stratBetter ? 'LA ESTRATEGIA SUPERÓ AL MERCADO' : 'BUY & HOLD FUE MEJOR'}
+                  {stratBetter ? `${result.strategyLabel} SUPERÓ AL MERCADO` : 'BUY & HOLD FUE MEJOR'}
                 </div>
                 <p className="text-sm text-txt">
-                  En {RANGE_LABEL[result.range]}, la estrategia de señales retornó{' '}
+                  En {RANGE_LABEL[result.range]}, la estrategia {result.strategyLabel} retornó{' '}
                   <span className={clsx('font-mono font-medium', result.stratReturn >= 0 ? 'text-buy' : 'text-sell')}>
                     {result.stratReturn >= 0 ? '+' : ''}{result.stratReturn}%
                   </span>
-                  {' '}vs. {' '}
+                  {' '}vs.{' '}
                   <span className={clsx('font-mono font-medium', result.buyHoldReturn >= 0 ? 'text-buy' : 'text-sell')}>
                     {result.buyHoldReturn >= 0 ? '+' : ''}{result.buyHoldReturn}%
                   </span>
                   {' '}comprando y manteniendo {result.ticker}.
+                  {result.commission > 0 && (
+                    <span className="text-muted"> (comisión {result.commission}% por trade aplicada)</span>
+                  )}
                 </p>
               </div>
             </div>
           </Card>
 
-          {/* Métricas */}
+          {/* ── Métricas principales ── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <MetricCard
               label="Retorno estrategia"
@@ -190,9 +283,41 @@ export default function BacktestPage() {
             />
           </div>
 
-          {/* Gráfico equity curve */}
+          {/* ── Métricas avanzadas ── */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <MetricCard
+              label="Sharpe Ratio"
+              value={result.sharpe ?? '—'}
+              sub="Retorno ajustado por riesgo"
+              positive={result.sharpe !== null ? result.sharpe > 1 : null}
+              tooltip="Sharpe > 1 = bueno · > 2 = excelente · < 0 = peor que efectivo"
+            />
+            <MetricCard
+              label="Sortino Ratio"
+              value={result.sortino ?? '—'}
+              sub="Solo penaliza caídas"
+              positive={result.sortino !== null ? result.sortino > 1 : null}
+              tooltip="Como Sharpe pero solo mide el riesgo bajista. Más útil en estrategias asimétricas."
+            />
+            <MetricCard
+              label="Profit Factor"
+              value={result.profitFactor ?? '—'}
+              sub="Ganancias / Pérdidas"
+              positive={result.profitFactor !== null ? result.profitFactor > 1 : null}
+              tooltip="PF > 1.5 = estrategia rentable · > 2 = muy buena · < 1 = pierde dinero"
+            />
+            <MetricCard
+              label="Duración media"
+              value={result.avgDuration ? `${result.avgDuration}d` : '—'}
+              sub={result.avgWin || result.avgLoss ? `Win $${result.avgWin ?? '—'} · Loss $${result.avgLoss ?? '—'}` : 'Por trade'}
+            />
+          </div>
+
+          {/* ── Equity curve ── */}
           <Card className="p-5">
-            <div className="font-mono text-xs text-muted uppercase tracking-wider mb-4">Evolución del capital ($10,000 inicial)</div>
+            <div className="font-mono text-xs text-muted uppercase tracking-wider mb-4">
+              Evolución del capital ($10,000 inicial) · {result.strategyLabel}
+            </div>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={result.equity} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
@@ -210,53 +335,36 @@ export default function BacktestPage() {
                     dataKey="date"
                     tickFormatter={d => d?.slice(5)}
                     tick={{ fontSize: 9, fontFamily: 'monospace', fill: '#666' }}
-                    axisLine={false}
-                    tickLine={false}
+                    axisLine={false} tickLine={false}
                     interval="preserveStartEnd"
                   />
                   <YAxis
                     tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
                     tick={{ fontSize: 9, fontFamily: 'monospace', fill: '#666' }}
-                    axisLine={false}
-                    tickLine={false}
+                    axisLine={false} tickLine={false}
                     width={48}
                   />
                   <Tooltip content={<CustomTooltip />} />
                   <ReferenceLine y={10000} stroke="#444" strokeDasharray="3 3" />
                   <Legend
-                    iconType="circle"
-                    iconSize={6}
-                    formatter={(v) => <span style={{ fontSize: '10px', fontFamily: 'monospace', color: '#999' }}>{v}</span>}
+                    iconType="circle" iconSize={6}
+                    formatter={v => <span style={{ fontSize: '10px', fontFamily: 'monospace', color: '#999' }}>{v}</span>}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="strat"
-                    name="Estrategia señales"
-                    stroke="#00e5a0"
-                    strokeWidth={1.5}
-                    fill="url(#stratGrad)"
-                    dot={false}
-                    activeDot={{ r: 3, fill: '#00e5a0' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="buyHold"
-                    name="Buy & Hold"
-                    stroke="#4f8cff"
-                    strokeWidth={1.5}
-                    fill="url(#bhGrad)"
-                    dot={false}
-                    activeDot={{ r: 3, fill: '#4f8cff' }}
-                  />
+                  <Area type="monotone" dataKey="strat" name={result.strategyLabel}
+                    stroke="#00e5a0" strokeWidth={1.5} fill="url(#stratGrad)"
+                    dot={false} activeDot={{ r: 3, fill: '#00e5a0' }} />
+                  <Area type="monotone" dataKey="buyHold" name="Buy & Hold"
+                    stroke="#4f8cff" strokeWidth={1.5} fill="url(#bhGrad)"
+                    dot={false} activeDot={{ r: 3, fill: '#4f8cff' }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </Card>
 
-          {/* Historial de trades */}
+          {/* ── Historial de trades ── */}
           {result.trades.length > 0 && (
             <div className="space-y-2">
-              <SectionLabel>Historial de operaciones</SectionLabel>
+              <SectionLabel>Historial de operaciones ({result.trades.length})</SectionLabel>
               <Card className="overflow-hidden">
                 <table className="w-full">
                   <thead>
@@ -264,6 +372,7 @@ export default function BacktestPage() {
                       <th className="font-mono text-[0.6rem] text-muted uppercase tracking-wider text-left px-4 py-3">Fecha</th>
                       <th className="font-mono text-[0.6rem] text-muted uppercase tracking-wider text-left px-4 py-3">Tipo</th>
                       <th className="font-mono text-[0.6rem] text-muted uppercase tracking-wider text-right px-4 py-3">Precio</th>
+                      <th className="font-mono text-[0.6rem] text-muted uppercase tracking-wider text-right px-4 py-3 hidden sm:table-cell">Salida</th>
                       <th className="font-mono text-[0.6rem] text-muted uppercase tracking-wider text-right px-4 py-3">P&L</th>
                     </tr>
                   </thead>
@@ -282,8 +391,17 @@ export default function BacktestPage() {
                           </span>
                         </td>
                         <td className="font-mono text-xs text-txt text-right px-4 py-2.5">{fmt.usd(t.price)}</td>
-                        <td className={clsx('font-mono text-xs text-right px-4 py-2.5', t.pnl !== undefined ? (t.pnl >= 0 ? 'text-buy' : 'text-sell') : 'text-muted')}>
-                          {t.pnl !== undefined ? `${t.pnl >= 0 ? '+' : ''}${fmt.usd(t.pnl)} (${t.pct >= 0 ? '+' : ''}${t.pct}%)` : '—'}
+                        <td className="font-mono text-[0.6rem] text-muted text-right px-4 py-2.5 hidden sm:table-cell">
+                          {t.exit ?? '—'}
+                        </td>
+                        <td className={clsx(
+                          'font-mono text-xs text-right px-4 py-2.5',
+                          t.pnl !== undefined ? (t.pnl >= 0 ? 'text-buy' : 'text-sell') : 'text-muted'
+                        )}>
+                          {t.pnl !== undefined
+                            ? `${t.pnl >= 0 ? '+' : ''}${fmt.usd(t.pnl)} (${t.pct >= 0 ? '+' : ''}${t.pct}%)`
+                            : '—'
+                          }
                         </td>
                       </tr>
                     ))}
@@ -298,8 +416,13 @@ export default function BacktestPage() {
       {!result && !loading && !error && (
         <Card className="p-12 text-center">
           <FlaskConical size={32} className="text-muted mx-auto mb-3" strokeWidth={1.5} />
-          <p className="text-muted2 text-sm">Ingresá un ticker y un período para simular las señales técnicas.</p>
-          <p className="font-mono text-xs text-muted mt-1">RSI · SMA20/50/200 · Momentum — vs. Buy & Hold</p>
+          <p className="text-muted2 text-sm">Elegí una estrategia, ingresá un ticker y simulá.</p>
+          <div className="flex flex-wrap justify-center gap-2 mt-3">
+            {['RSI + SMA', 'Bollinger', 'ROC + Vol', 'Breakout'].map(s => (
+              <span key={s} className="font-mono text-[0.6rem] text-muted bg-s2 px-2.5 py-1 rounded-lg">{s}</span>
+            ))}
+          </div>
+          <p className="font-mono text-xs text-muted mt-3">Incluye Macro Guard · Sharpe · Sortino · Profit Factor · Comisiones</p>
         </Card>
       )}
     </div>
