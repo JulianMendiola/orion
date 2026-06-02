@@ -350,8 +350,8 @@ export default function AlertsPage() {
       const data = await signalsService.getSmartAlerts()
       setSmartAlerts(data.alerts ?? [])
       setScanTs(data.ts)
-    } catch {
-      setScanError('No se pudo conectar con el backend.')
+    } catch (e) {
+      setScanError(e.response?.data?.error ?? e.message ?? 'No se pudo conectar con el backend.')
       setSmartAlerts([])
     }
     setScanning(false)
