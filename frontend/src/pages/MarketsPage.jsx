@@ -7,6 +7,7 @@ import clsx from 'clsx'
 
 const TABS = [
   { id: 'stocks', label: 'Acciones', icon: TrendingUp },
+  { id: 'cedears', label: 'CEDEARs', icon: DollarSign },
   { id: 'crypto',  label: 'Cripto',   icon: Bitcoin },
   { id: 'forex',   label: 'Forex',    icon: DollarSign },
   { id: 'etfs',    label: 'ETFs',     icon: BarChart2 },
@@ -90,6 +91,18 @@ async function fetchTab(tab) {
         sector: FOREX_LABELS[p]?.sector ?? '—',
         isForex: true,
       }))
+  }
+  if (tab === 'cedears') {
+    const rows = await marketService.getCedears()
+    return rows.map(r => ({
+      ticker:  r.ticker,
+      name:    r.name,
+      price:   r.priceArs,
+      pct:     r.pctArs,
+      mktCap:  r.priceUsd ? `US$${Number(r.priceUsd).toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—',
+      sector:  'CEDEAR',
+      isArs:   true,
+    }))
   }
   if (tab === 'bonds') return BONDS_MOCK
   return []
@@ -192,7 +205,9 @@ export default function MarketsPage() {
                     </div>
                   </td>
                   <td className="px-5 py-3.5 text-right font-mono text-sm text-txt">
-                    {tab === 'bonds' && !row.isForex ? `${row.price}%` : fmt.usd(row.price)}
+                    {tab === 'bonds' && !row.isForex ? `${row.price}%`
+                      : row.isArs ? `$${Number(row.price).toLocaleString('es-AR', { maximumFractionDigits: 2 })}`
+                      : fmt.usd(row.price)}
                   </td>
                   <td className={clsx('px-5 py-3.5 text-right font-mono text-sm font-medium', pctClass(row.pct))}>
                     {fmt.pct(row.pct)}

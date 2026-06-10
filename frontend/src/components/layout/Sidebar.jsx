@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, Briefcase,
-  Zap, Newspaper, Settings, LogOut, Bell, FlaskConical, Eye
+  Zap, Newspaper, Settings, LogOut, Bell, FlaskConical, Eye, Sparkles
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { useAlertsStore } from '@/store/alertsStore'
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/news',      icon: Newspaper,        label: 'Noticias'   },
   { to: '/alerts',    icon: Bell,             label: 'Alertas', badge: true },
   { to: '/backtest',  icon: FlaskConical,     label: 'Backtest'   },
+  { to: '/chat',      icon: Sparkles,         label: 'Chat IA'    },
 ]
 
 export default function Sidebar() {

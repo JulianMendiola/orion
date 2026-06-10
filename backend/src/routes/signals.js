@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import yahooFinance from 'yahoo-finance2'
+import yahooFinance from '../yf.js'
 
 const router = Router()
 const YF_OPTS = { validateResult: false }

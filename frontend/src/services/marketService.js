@@ -59,6 +59,24 @@ export const marketService = {
     }
   },
 
+  async getCedears() {
+    try {
+      const { data } = await api.get('/market/cedears')
+      return Array.isArray(guard(data, [])) ? data : []
+    } catch {
+      return []
+    }
+  },
+
+  async getArgentina() {
+    try {
+      const { data } = await api.get('/market/argentina')
+      return guard(data, null)
+    } catch {
+      return null
+    }
+  },
+
   async getForex(pairs = ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDARS=X', 'USDBRL=X']) {
     try {
       const { data } = await api.get('/market/forex', { params: { pairs: pairs.join(',') } })

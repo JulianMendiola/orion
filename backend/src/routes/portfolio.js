@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import yahooFinance from 'yahoo-finance2'
+import yahooFinance from '../yf.js'
 import { pool } from '../db.js'
 import { requireAuth } from '../middleware/auth.js'
 

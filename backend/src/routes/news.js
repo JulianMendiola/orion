@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import axios from 'axios'
 import { XMLParser } from 'fast-xml-parser'
-import yahooFinance from 'yahoo-finance2'
+import yahooFinance from '../yf.js'
 
 const router  = Router()
 const parser  = new XMLParser({ ignoreAttributes: false, cdataPropName: '__cdata' })
@@ -17,10 +17,10 @@ const rssClient = axios.create({
 
 // ── Fuentes RSS argentinas ───────────────────────────────
 const AR_SOURCES = [
-  { name: 'Ámbito',      url: 'https://www.ambito.com/rss.xml',                                          country: 'AR' },
-  { name: 'iProfesional', url: 'https://e.infopro.com.ar/rss/ultimasnoticias.xml',                       country: 'AR' },
-  { name: 'El Cronista',  url: 'https://www.cronista.com/files/feeds/noticias.xml',                       country: 'AR' },
-  { name: 'Infobae Eco',  url: 'https://www.infobae.com/feeds/rss/economia-y-negocios.xml',               country: 'AR' },
+  { name: 'Ámbito',       url: 'https://www.ambito.com/rss/economia.xml',           country: 'AR' },
+  { name: 'iProfesional', url: 'https://www.iprofesional.com/rss',                  country: 'AR' },
+  { name: 'Infobae',      url: 'https://www.infobae.com/arc/outboundfeeds/rss/category/economia/', country: 'AR' },
+  { name: 'Perfil Eco',   url: 'https://www.perfil.com/feed/economia',              country: 'AR' },
 ]
 
 function extractText(val) {

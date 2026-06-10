@@ -8,6 +8,7 @@ import SignalsPage from '@/pages/SignalsPage'
 import NewsPage from '@/pages/NewsPage'
 import AlertsPage from '@/pages/AlertsPage'
 import BacktestPage from '@/pages/BacktestPage'
+import ChatPage from '@/pages/ChatPage'
 import LoginPage from '@/pages/LoginPage'
 import { useAuthStore } from '@/store/authStore'
 import { useMarketStore } from '@/store/marketStore'
@@ -100,6 +101,7 @@ export default function App() {
         <Route path="news"       element={<NewsPage />} />
         <Route path="alerts"     element={<AlertsPage />} />
         <Route path="backtest"   element={<BacktestPage />} />
+        <Route path="chat"       element={<ChatPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

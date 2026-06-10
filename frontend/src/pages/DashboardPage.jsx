@@ -6,6 +6,7 @@ import PositionsList from '@/components/dashboard/PositionsList'
 import AllocationChart from '@/components/dashboard/AllocationChart'
 import DailyBrief from '@/components/dashboard/DailyBrief'
 import QuickSignals from '@/components/dashboard/QuickSignals'
+import ArgentinaPanel from '@/components/dashboard/ArgentinaPanel'
 
 export default function DashboardPage() {
   const { refresh, quotes } = useMarketStore()
@@ -35,6 +36,7 @@ export default function DashboardPage() {
 
         {/* Right column */}
         <div className="space-y-5">
+          <ArgentinaPanel />
           <AllocationChart />
           <DailyBrief />
         </div>

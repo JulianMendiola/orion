@@ -8,6 +8,7 @@ import marketRoutes    from './routes/market.js'
 import signalRoutes    from './routes/signals.js'
 import portfolioRoutes from './routes/portfolio.js'
 import newsRoutes      from './routes/news.js'
+import chatRoutes      from './routes/chat.js'
 
 const app  = express()
 const PORT = process.env.PORT ?? 4000
@@ -33,6 +34,7 @@ app.use('/api/market',    marketRoutes)
 app.use('/api/signals',   signalRoutes)
 app.use('/api/portfolio', portfolioRoutes)
 app.use('/api/news',      newsRoutes)
+app.use('/api/chat',      chatRoutes)
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }))
 
